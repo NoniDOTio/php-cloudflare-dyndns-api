@@ -3,16 +3,16 @@
 //
 // Settings
 //
-const USE_CACHE = TRUE; // Whether the script should write the current IP to a cache file and only update Cloudflare when it changes
-const REQUIRE_AUTH = TRUE; // Whether username and password is checked before running the script
-const TURN_ON_LOGGING = TRUE; // Whether this script should write to a log file
-const AUTH_USERNAME = 'sunshine'; // Only used if REQUIRE_AUTH is TRUE
-const AUTH_PASSWORD = 'abc123'; // Choose a strong password if you host this script on a public server.
+const USE_CACHE = true;
+const REQUIRE_AUTH = true;
+const TURN_ON_LOGGING = true;
+const AUTH_USERNAME = 'sunshine';
+const AUTH_PASSWORD = 'abc123';
 
 
 //
 // Get variables from query string
-// If you're using the script for one domain only, you can fill "" with default values and omit the fields in requests to this API.
+// You may fill "" with default values and omit the fields in requests to this API.
 //
 define("USERNAME", $_GET["user"] ?? "");
 define("PASSWORD", $_GET["pass"] ?? "");
@@ -54,8 +54,8 @@ enum IPVersion {
 //
 function write_log(string $message) : void {
     if(!TURN_ON_LOGGING) return;
-    $log_file_name =
-        file_put_contents(CLOUDFLARE_RECORD_NAME . "." . CLOUDFLARE_DOMAIN . ".log", date('[Y-m-d H:i:s] ') . $message . PHP_EOL, FILE_APPEND);
+    $log_file_name = CLOUDFLARE_RECORD_NAME . "." . CLOUDFLARE_DOMAIN . date('[Y-m-d] ') . ".log";
+    file_put_contents($log_file_name , date('[Y-m-d H:i:s] ') . $message . PHP_EOL, FILE_APPEND);
 }
 
 
@@ -69,8 +69,7 @@ function ip_is_equal_to_cached_ip(string $ip, IPVersion $ip_version) : bool {
     if (!file_exists($cache_file_name)) {
         file_put_contents($cache_file_name, "");
     }
-
-    return ($ip === file_get_contents($cache_file_name));
+    return $ip === file_get_contents($cache_file_name);
 }
 
 
