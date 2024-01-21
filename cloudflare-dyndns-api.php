@@ -6,22 +6,22 @@
 const USE_CACHE = true;
 const REQUIRE_AUTH = true;
 const TURN_ON_LOGGING = true;
+const LOGLEVEL = 'INFO';
 const AUTH_USERNAME = 'sunshine';
 const AUTH_PASSWORD = 'abc123';
 
 
 //
 // Get variables from query string
-// You may fill "" with default values and omit the fields in requests to this API.
+// You may fill "" with default values and omit the fields in requests to this script.
 //
 define("USERNAME", $_GET["user"] ?? "");
 define("PASSWORD", $_GET["pass"] ?? "");
 define("IPV4_ADDRESS", $_GET["ipv4"] ?? "");
 define("IPV6_ADDRESS", $_GET["ipv6"] ?? "");
-define("CLOUDFLARE_DOMAIN", $_GET["domain"] ?? "");
+define("DOMAIN", $_GET["domain"] ?? "");
 define("CLOUDFLARE_API_KEY", $_GET["cfapikey"] ?? "");
 define("CLOUDFLARE_EMAIL", $_GET["cfemail"] ?? "");
-define("CLOUDFLARE_RECORD_NAME", $_GET["cfrecordname"] ?? "");
 
 
 //
@@ -31,7 +31,7 @@ enum IPVersion {
     case v4;
     case v6;
 
-    public function type(): string {
+    function type(): string {
         return match($this)
         {
             self::v4 => 'A',
@@ -39,7 +39,7 @@ enum IPVersion {
         };
     }
 
-    public function name(): string {
+    function name(): string {
         return match($this)
         {
             self::v4 => 'IPv4',
@@ -49,12 +49,30 @@ enum IPVersion {
 }
 
 
+enum LogLevel : int {
+    case DEBUG = 0;
+    case INFO = 1;
+    case WARN = 2;
+    case ERROR = 3;
+
+    static function fromString(string $str): self {
+        return match(strtoupper($str)) {
+            'DEBUG' => self::DEBUG,
+            'WARN' => self::WARN,
+            'ERROR' => self::ERROR,
+            default => self::INFO,
+        };
+    }
+}
+
+
 //
 // Log to file
 //
-function write_log(string $message) : void {
+function write_log(string $message, $level = LogLevel::INFO) : void {
     if(!TURN_ON_LOGGING) return;
-    $log_file_name = CLOUDFLARE_RECORD_NAME . "." . CLOUDFLARE_DOMAIN . date('[Y-m-d] ') . ".log";
+    if($level < LogLevel::fromString(LOGLEVEL)) return;
+    $log_file_name = CLOUDFLARE_RECORD_NAME . "." . CLOUDFLARE_DOMAIN . date('_Y-m-d') . ".log";
     file_put_contents($log_file_name , date('[Y-m-d H:i:s] ') . $message . PHP_EOL, FILE_APPEND);
 }
 
@@ -97,11 +115,12 @@ function cloudflare_get_zone_id() : string {
     ));
 
     $response = json_decode(curl_exec($ch), true);
-    var_dump($response);
     curl_close($ch);
 
     if (!isset($response['result'][0]['id'])) {
-        die('Error fetching zone ID');
+        write_log('Error fetching zone ID from Cloudflare API', LogLevel::ERROR);
+        header("HTTP/1.1 500 Internal Server Error");
+        die('Error fetching zone ID from Cloudflare API');
     }
 
     return $response['result'][0]['id'];
@@ -125,11 +144,12 @@ function cloudflare_get_record_id(string $cloudflare_zone_id, IPVersion $ip_vers
     ));
 
     $response = json_decode(curl_exec($ch), true);
-    var_dump($response);
     curl_close($ch);
 
     if (!isset($response['result'][0]['id'])) {
-        die('Error fetching DNS record ID');
+        write_log('Error fetching record ID from Cloudflare API', LogLevel::ERROR);
+        header("HTTP/1.1 500 Internal Server Error");
+        die('Error fetching record ID from Cloudflare API');
     }
 
     return $response['result'][0]['id'];
@@ -156,15 +176,41 @@ function cloudflare_updated_record(string $cloudflare_zone_id, string $cloudflar
     ));
 
     curl_setopt($ch, CURLOPT_POSTFIELDS, $data);
-
     $response = json_decode(curl_exec($ch), true);
-    var_dump($response);
     curl_close($ch);
 
     if (isset($response['success']) && $response['success']) {
         write_log('Set ' . $ip_version->type() . ' ' . CLOUDFLARE_RECORD_NAME . ' to ' . $ip_address);
     } else {
-        write_log('Error updating ' . CLOUDFLARE_RECORD_NAME . ' with IPv4 address: ' . $response['errors'][0]['message']);
+        write_log('Error updating ' . CLOUDFLARE_RECORD_NAME . ' with IPv4 address: ' . $response['errors'][0]['message'], LogLevel::ERROR);
+        header("HTTP/1.1 500 Internal Server Error");
+        die('Error updating Cloudflare record');
+    }
+}
+
+
+function update_ip_address(string $ip_address, IPVersion $ip_version) : void {
+    if(ip_is_equal_to_cached_ip($ip_address, $ip_version)) {
+        write_log(
+            message: $ip_version->name() . ' for ' . CLOUDFLARE_RECORD_NAME . ' (' . $ip_address . ') is already cached.',
+            level: LogLevel::DEBUG,
+        );
+    } else {
+        update_cache(
+            ip_address: $ip_address,
+            ip_version: $ip_version,
+        );
+        $cloudflare_zone_id = cloudflare_get_zone_id();
+        $cloudflare_record_id = cloudflare_get_record_id(
+            cloudflare_zone_id: $cloudflare_zone_id,
+            ip_version: $ip_version,
+        );
+        cloudflare_updated_record(
+            cloudflare_zone_id: $cloudflare_zone_id,
+            cloudflare_record_id: $cloudflare_record_id,
+            ip_address: $ip_address,
+            ip_version: $ip_version,
+        );
     }
 }
 
@@ -179,52 +225,24 @@ if(REQUIRE_AUTH && USERNAME !== AUTH_USERNAME && PASSWORD !== AUTH_PASSWORD) {
 
 
 //
-// Update IPv4 Logic
+// Split into subdomain and domain
+//
+$domain_parts = explode(".", DOMAIN);
+if(count($domain_parts) < 2) {
+    header("HTTP/1.1 400 Bad Request");
+    die("HTTP 400 Bad Request: Invalid Domain");
+}
+$record_name = implode(".", array_slice($domain_parts, 0, -2));
+define("CLOUDFLARE_RECORD_NAME", $record_name === "" ? "@" : $record_name);
+define("CLOUDFLARE_DOMAIN", $domain_parts[count($domain_parts) - 2] . "." . end($domain_parts));
+
+
+//
+// Update IPv4 and IPv6
 //
 if(IPV4_ADDRESS !== "") {
-    if(ip_is_equal_to_cached_ip(IPV4_ADDRESS, IPVersion::v4)) {
-        write_log(IPVersion::v4->name() . ' for ' . CLOUDFLARE_RECORD_NAME . ' (' . IPV4_ADDRESS . ') is already cached.');
-    } else {
-        update_cache(
-            ip_address: IPV4_ADDRESS,
-            ip_version: IPVersion::v4,
-        );
-        $cloudflare_zone_id = cloudflare_get_zone_id();
-        $cloudflare_record_id = cloudflare_get_record_id(
-            cloudflare_zone_id: $cloudflare_zone_id,
-            ip_version: IPVersion::v4,
-        );
-        cloudflare_updated_record(
-            cloudflare_zone_id: $cloudflare_zone_id,
-            cloudflare_record_id: $cloudflare_record_id,
-            ip_address: IPV4_ADDRESS,
-            ip_version: IPVersion::v4,
-        );
-    }
+    update_ip_address(IPV4_ADDRESS, IPVersion::v4);
 }
-
-
-//
-// Update IPv6 Logic
-//
 if(IPV6_ADDRESS !== "") {
-    if(ip_is_equal_to_cached_ip(IPV6_ADDRESS, IPVersion::v6)) {
-        write_log(IPVersion::v6->name() . ' for ' . CLOUDFLARE_RECORD_NAME . ' (' . IPV6_ADDRESS . ') is already cached.');
-    } else {
-        update_cache(
-            ip_address: IPV6_ADDRESS,
-            ip_version: IPVersion::v6,
-        );
-        $cloudflare_zone_id = cloudflare_get_zone_id();
-        $cloudflare_record_id = cloudflare_get_record_id(
-            cloudflare_zone_id: $cloudflare_zone_id,
-            ip_version: IPVersion::v6,
-        );
-        cloudflare_updated_record(
-            cloudflare_zone_id: $cloudflare_zone_id,
-            cloudflare_record_id: $cloudflare_record_id,
-            ip_address: IPV6_ADDRESS,
-            ip_version: IPVersion::v6,
-        );
-    }
+    update_ip_address(IPV6_ADDRESS, IPVersion::v6);
 }
