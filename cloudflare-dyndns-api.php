@@ -21,6 +21,7 @@ define("IPV4_ADDRESS", $_GET["ipv4"] ?? "");
 define("IPV6_ADDRESS", $_GET["ipv6"] ?? "");
 define("DOMAIN", $_GET["domain"] ?? "");
 define("CLOUDFLARE_API_KEY", $_GET["cfapikey"] ?? "");
+define("CLOUDFLARE_API_TOKEN", $_GET["cfapitoken"] ?? "");
 define("CLOUDFLARE_EMAIL", $_GET["cfemail"] ?? "");
 
 
@@ -72,7 +73,7 @@ enum LogLevel : int {
 function write_log(string $message, $level = LogLevel::INFO) : void {
     if(!TURN_ON_LOGGING) return;
     if($level < LogLevel::fromString(LOGLEVEL)) return;
-    $log_file_name = CLOUDFLARE_RECORD_NAME . "." . CLOUDFLARE_DOMAIN . date('_Y-m-d') . ".log";
+    $log_file_name = CLOUDFLARE_RECORD_NAME . "." . CLOUDFLARE_DOMAIN . date('_Y-m') . ".log";
     file_put_contents($log_file_name , date('[Y-m-d H:i:s] ') . $message . PHP_EOL, FILE_APPEND);
 }
 
@@ -110,7 +111,7 @@ function cloudflare_get_zone_id() : string {
     curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
     curl_setopt($ch, CURLOPT_HTTPHEADER, array(
         'X-Auth-Email: ' . CLOUDFLARE_EMAIL,
-        'X-Auth-Key: ' . CLOUDFLARE_API_KEY,
+        CLOUDFLARE_API_CURL_AUTH_HEADER,
         'Content-Type: application/json',
     ));
 
@@ -139,7 +140,7 @@ function cloudflare_get_record_id(string $cloudflare_zone_id, IPVersion $ip_vers
     curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
     curl_setopt($ch, CURLOPT_HTTPHEADER, array(
         'X-Auth-Email: ' . CLOUDFLARE_EMAIL,
-        'X-Auth-Key: ' . CLOUDFLARE_API_KEY,
+        CLOUDFLARE_API_CURL_AUTH_HEADER,
         'Content-Type: application/json',
     ));
 
@@ -165,7 +166,7 @@ function cloudflare_updated_record(string $cloudflare_zone_id, string $cloudflar
     curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
     curl_setopt($ch, CURLOPT_HTTPHEADER, array(
         'X-Auth-Email: ' . CLOUDFLARE_EMAIL,
-        'X-Auth-Key: ' . CLOUDFLARE_API_KEY,
+        CLOUDFLARE_API_CURL_AUTH_HEADER,
         'Content-Type: application/json',
     ));
 
@@ -216,17 +217,54 @@ function update_ip_address(string $ip_address, IPVersion $ip_version) : void {
 
 
 //
-// Verify username and password is correct
+// Main
 //
+
+// Verify username and password
 if(REQUIRE_AUTH && USERNAME !== AUTH_USERNAME && PASSWORD !== AUTH_PASSWORD) {
     header("HTTP/1.1 401 Unauthorized");
     die("HTTP 401 Unauthorized: Access Denied");
 }
 
 
-//
+// Exit if no API key/token or email provided
+if(CLOUDFLARE_API_KEY === "" && CLOUDFLARE_API_TOKEN === "" or CLOUDFLARE_EMAIL === "") {
+    header("HTTP/1.1 400 Bad Request");
+    die("HTTP 400 Bad Request: No credentials for Cloudflare provided");
+}
+
+
+// If both API key and token are provided, use the token
+if(CLOUDFLARE_API_TOKEN !== "") {
+    define("CLOUDFLARE_API_CURL_AUTH_HEADER", 'Authorization: Bearer ' . CLOUDFLARE_API_TOKEN);
+} else {
+    define("CLOUDFLARE_API_CURL_AUTH_HEADER", 'X-Auth-Key: ' . CLOUDFLARE_API_KEY);
+}
+
+
+// Make sure IPv4 address and IPv6 address are either blank or valid and at least one is provided
+if(IPV4_ADDRESS !== "" && !filter_var(IPV4_ADDRESS, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)) {
+    header("HTTP/1.1 400 Bad Request");
+    die("HTTP 400 Bad Request: Invalid IPv4 address");
+}
+if(IPV6_ADDRESS !== "" && !filter_var(IPV6_ADDRESS, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6)) {
+    header("HTTP/1.1 400 Bad Request");
+    die("HTTP 400 Bad Request: Invalid IPv6 address");
+}
+if(IPV4_ADDRESS === "" && IPV6_ADDRESS === "") {
+    header("HTTP/1.1 400 Bad Request");
+    die("HTTP 400 Bad Request: No IPv4 or IPv6 address provided");
+}
+
+
+// Make sure domain is valid
+if(DOMAIN === "") {
+    header("HTTP/1.1 400 Bad Request");
+    die("HTTP 400 Bad Request: No domain provided");
+}
+
+
 // Split into subdomain and domain
-//
 $domain_parts = explode(".", DOMAIN);
 if(count($domain_parts) < 2) {
     header("HTTP/1.1 400 Bad Request");
@@ -237,9 +275,7 @@ define("CLOUDFLARE_RECORD_NAME", $record_name === "" ? "@" : $record_name);
 define("CLOUDFLARE_DOMAIN", $domain_parts[count($domain_parts) - 2] . "." . end($domain_parts));
 
 
-//
 // Update IPv4 and IPv6
-//
 if(IPV4_ADDRESS !== "") {
     update_ip_address(IPV4_ADDRESS, IPVersion::v4);
 }

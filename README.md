@@ -5,10 +5,11 @@ It's a single PHP file that acts as a wrapper for the Cloudflare API, so you can
 
 ## Requirements
 - Cloudflare account (free)
-- Cloudflare API key
+- Cloudflare API key or API token
 - Webserver with PHP 8.1 or higher
 
 ## Installation
+- Make sure a DNS record for the domain you want to update already exists in your Cloudflare account.
 - Download `cloudflare-dyndns-api.php` and upload it to your webserver.
 - Open the file and edit preferences to your liking.
   - **USE_CACHE** · When set to `true`, the script will write the current IP to a cache file and only update Cloudflare when it has changed.
@@ -33,7 +34,7 @@ Open the FRITZ!Box user interface and navigate to Internet -> Permit Access -> D
 - **User** and **Password** · The credentials you set in the PHP file
 - **Update-URL** · Use the url shown below, but fill in the following values:
   - **cfemail** · The email address you used to sign up for Cloudflare
-  - **cfapikey** · Your Cloudflare API key
+  - **cfapikey** or **cfapitoken** · Either your Cloudflare API key or your API token. If you set both, the token will be used.
 
 ```text
 https://example.com/cloudflare-dyndns-api.php?ipv4=<ipaddr>&ipv6=<ip6addr>&user=<username>&pass=<passwd>&domain=<domain>&cfemail=mail@example.com&cfapikey=XXX
@@ -46,7 +47,7 @@ Make sure to replace the values for the following fields:
 - **user** and **pass** · The credentials you set in the PHP file
 - **domain** · The domain you want to update
 - **cfemail** · The email address you used to sign up for Cloudflare
-- **cfapikey** · Your Cloudflare API key
+- **cfapikey** or **cfapitoken** · Either your Cloudflare API key or your API token. If you set both, the token will be used.
 
 ```text
 */10 * * * * /usr/bin/curl -sS https://example.com/cloudflare-dyndns-api.php?ipv4=$(curl -sS ifconfig.me)&user=sunshine&pass=abc123&cfemail=mail@example.com&cfapikey=XXX&domain=myhome.example.com
